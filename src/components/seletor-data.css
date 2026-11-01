@@ -1,0 +1,80 @@
+/* Tema escuro/dourado do calendário (react-day-picker).
+   Este arquivo é importado DEPOIS do CSS padrão da biblioteca, então vence a ele. */
+
+.calendario-barbearia.rdp-root {
+  --rdp-accent-color: #c9a24b;
+  --rdp-accent-background-color: rgba(201, 162, 75, 0.18);
+  --rdp-day-height: 40px;
+  --rdp-day-width: 40px;
+  --rdp-day_button-height: 38px;
+  --rdp-day_button-width: 38px;
+  --rdp-day_button-border-radius: 2px;
+  --rdp-selected-border: 2px solid #c9a24b;
+  --rdp-disabled-opacity: 0.22;
+  --rdp-outside-opacity: 0.3;
+  --rdp-weekday-opacity: 1;
+
+  background: #171717;
+  border: 1px solid #404040;
+  padding: 16px;
+  color: #e5e5e5;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+}
+
+/* Nome do mês */
+.calendario-barbearia .rdp-caption_label {
+  font-family: var(--font-display, serif);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #ffffff;
+  text-transform: capitalize;
+}
+
+/* Dias da semana (D S T Q Q S S) */
+.calendario-barbearia .rdp-weekday {
+  color: #a3a3a3;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* Botões de mês anterior / próximo */
+.calendario-barbearia .rdp-button_previous:hover:not(:disabled),
+.calendario-barbearia .rdp-button_next:hover:not(:disabled) {
+  background: rgba(201, 162, 75, 0.15);
+}
+
+/* Dias */
+.calendario-barbearia .rdp-day_button {
+  transition: background-color 0.15s;
+}
+
+.calendario-barbearia .rdp-day_button:hover:not(:disabled) {
+  background: rgba(201, 162, 75, 0.22);
+}
+
+.calendario-barbearia .rdp-day_button:disabled {
+  cursor: not-allowed;
+}
+
+.calendario-barbearia .rdp-day_button:focus-visible {
+  outline: 2px solid #e2c275;
+  outline-offset: 1px;
+}
+
+/* Hoje: texto dourado (a biblioteca já aplica a cor de destaque) */
+.calendario-barbearia .rdp-today:not(.rdp-outside) {
+  font-weight: 700;
+}
+
+/* Dia selecionado: preenchido de dourado */
+.calendario-barbearia .rdp-selected {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.calendario-barbearia .rdp-selected .rdp-day_button {
+  background: #c9a24b;
+  border-color: #c9a24b;
+  color: #0a0a0a;
+}

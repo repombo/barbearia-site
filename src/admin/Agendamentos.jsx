@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../supabaseClient'
 import Toast from '../components/Toast'
 import { useToast } from './useToast'
-import { formatarData, formatarHora, linkWhatsapp, mensagemErro, moeda } from './utils'
+import {
+  formatarData,
+  formatarHora,
+  linkWhatsapp,
+  mensagemConfirmacao,
+  mensagemErro,
+  moeda,
+} from './utils'
 import { Carregando, ConfirmDialog, ErroBox, StatusBadge, estilos } from './ui'
 
 const OPCOES_STATUS = [
@@ -15,7 +22,7 @@ const OPCOES_STATUS = [
 
 const LIMITE = 300
 
-function Acoes({ ag, ocupado, onStatus, onExcluir }) {
+function Acoes({ ag, ocupado, onStatus, onExcluir, onWhatsapp }) {
   return (
     <div className="flex flex-wrap gap-2">
       {ag.status === 'pendente' && (
@@ -24,9 +31,14 @@ function Acoes({ ag, ocupado, onStatus, onExcluir }) {
         </button>
       )}
       {ag.status === 'confirmado' && (
-        <button type="button" disabled={ocupado} onClick={() => onStatus(ag, 'concluido')} className={estilos.btnPrimario}>
-          Concluir
-        </button>
+        <>
+          <button type="button" disabled={ocupado} onClick={() => onStatus(ag, 'concluido')} className={estilos.btnPrimario}>
+            Concluir
+          </button>
+          <button type="button" disabled={ocupado} onClick={() => onWhatsapp(ag)} className={estilos.btnSecundario}>
+            WhatsApp
+          </button>
+        </>
       )}
       <button type="button" disabled={ocupado} onClick={() => onExcluir(ag)} className={estilos.btnPerigo}>
         Excluir
@@ -83,6 +95,11 @@ export default function Agendamentos() {
   async function mudarStatus(ag, novoStatus) {
     setOcupadoId(ag.id)
 
+    // O navegador só permite abrir uma nova aba logo após um clique. Como a
+    // atualização abaixo demora (é assíncrona), abrimos a aba JÁ, em branco, e só
+    // depois do sucesso mandamos ela para o WhatsApp. Se der erro, a aba é fechada.
+    const abaWhatsapp = novoStatus === 'confirmado' ? window.open('about:blank', '_blank') : null
+
     // .select('id') confirma que a linha foi realmente alterada
     // (se o RLS bloquear, o Supabase retorna 0 linhas, sem erro).
     const { data, error } = await supabase
@@ -94,17 +111,38 @@ export default function Agendamentos() {
     setOcupadoId(null)
 
     if (error || !data?.length) {
+      abaWhatsapp?.close()
       console.error('Erro ao atualizar status:', error)
       toastErro(mensagemErro(error, 'Não foi possível atualizar o agendamento.'))
       return
     }
 
-    sucesso(novoStatus === 'confirmado' ? 'Agendamento confirmado.' : 'Agendamento concluído.')
+    if (novoStatus === 'confirmado') {
+      if (abaWhatsapp) {
+        try {
+          abaWhatsapp.opener = null // segurança: a aba nova não controla esta
+        } catch {
+          /* ignora */
+        }
+        abaWhatsapp.location.href = linkWhatsapp(ag.contato, mensagemConfirmacao(ag))
+        sucesso('Agendamento confirmado. Abrindo o WhatsApp...')
+      } else {
+        sucesso('Agendamento confirmado! O navegador bloqueou a nova aba: use o botão "WhatsApp" do agendamento.')
+      }
+    } else {
+      sucesso('Agendamento concluído.')
+    }
+
     setAgendamentos((lista) =>
       filtroStatus === 'todos'
         ? lista.map((a) => (a.id === ag.id ? { ...a, status: novoStatus } : a))
         : lista.filter((a) => a.id !== ag.id) // saiu do filtro atual
     )
+  }
+
+  // Botão "WhatsApp" (reenviar a confirmação): é um clique direto, então não é bloqueado
+  function reenviarWhatsapp(ag) {
+    window.open(linkWhatsapp(ag.contato, mensagemConfirmacao(ag)), '_blank', 'noopener,noreferrer')
   }
 
   async function excluir() {
@@ -210,7 +248,13 @@ export default function Agendamentos() {
                     <td className="px-4 py-3 text-neutral-300">{formatarHora(ag.hora_desejada)}</td>
                     <td className="px-4 py-3"><StatusBadge status={ag.status} /></td>
                     <td className="px-4 py-3">
-                      <Acoes ag={ag} ocupado={ocupadoId === ag.id} onStatus={mudarStatus} onExcluir={setParaExcluir} />
+                      <Acoes
+                        ag={ag}
+                        ocupado={ocupadoId === ag.id}
+                        onStatus={mudarStatus}
+                        onExcluir={setParaExcluir}
+                        onWhatsapp={reenviarWhatsapp}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -236,7 +280,13 @@ export default function Agendamentos() {
                 <a href={linkWhatsapp(ag.contato)} target="_blank" rel="noreferrer" className="inline-block text-sm text-ouro">
                   {ag.contato}
                 </a>
-                <Acoes ag={ag} ocupado={ocupadoId === ag.id} onStatus={mudarStatus} onExcluir={setParaExcluir} />
+                <Acoes
+                  ag={ag}
+                  ocupado={ocupadoId === ag.id}
+                  onStatus={mudarStatus}
+                  onExcluir={setParaExcluir}
+                  onWhatsapp={reenviarWhatsapp}
+                />
               </li>
             ))}
           </ul>

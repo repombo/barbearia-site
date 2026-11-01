@@ -1,3 +1,5 @@
+import { BARBEARIA } from '../config'
+
 export const moeda = (v) =>
   Number(v ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
@@ -29,12 +31,35 @@ export function intervaloDoMes(data = new Date()) {
   }
 }
 
+/* ---------- WhatsApp ---------- */
+
+// Remove tudo que não é número: "(11) 99999-9999" -> "11999999999"
 export const soDigitos = (s) => String(s ?? '').replace(/\D/g, '')
 
-// Link do WhatsApp a partir do contato salvo no formulário
-export function linkWhatsapp(contato) {
-  const d = soDigitos(contato)
-  return `https://wa.me/${d.length <= 11 ? '55' + d : d}`
+// Deixa o telefone no formato que o wa.me exige: só números, com o código do país.
+//   "(11) 99999-9999"  -> "5511999999999"
+//   "+55 11 99999-9999" -> "5511999999999"
+export function telefoneParaWhatsapp(contato) {
+  let numero = soDigitos(contato).replace(/^0+/, '') // tira zeros à esquerda (ex.: 011...)
+  if (numero.length === 10 || numero.length === 11) numero = `55${numero}` // DDD + número -> adiciona Brasil
+  return numero
+}
+
+// Monta o link do WhatsApp. Com "mensagem", o texto já vai preenchido.
+export function linkWhatsapp(contato, mensagem) {
+  const base = `https://wa.me/${telefoneParaWhatsapp(contato)}`
+  return mensagem ? `${base}?text=${encodeURIComponent(mensagem)}` : base
+}
+
+// Texto enviado ao cliente quando o barbeiro confirma o agendamento
+export function mensagemConfirmacao(ag) {
+  const primeiroNome = String(ag.nome_cliente ?? '').trim().split(/\s+/)[0]
+  const servico = ag.servicos?.nome ?? 'serviço'
+  return (
+    `Olá, ${primeiroNome}! Seu agendamento de ${servico} na data ` +
+    `${formatarData(ag.data_desejada)} às ${formatarHora(ag.hora_desejada)} está confirmado. ` +
+    `Até breve! ${BARBEARIA.nome}`
+  )
 }
 
 export const STATUS = {

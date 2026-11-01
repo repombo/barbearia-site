@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../supabaseClient'
 import { HORA_ABERTURA, HORA_FECHAMENTO } from '../config'
 import Toast from './Toast'
+import SeletorData, { DIAS_FOLGA } from './SeletorData'
+import SeletorHorario from './SeletorHorario'
+import { conflitaComOcupados, gerarHorarios, paraMinutos } from './horarios'
+
+const MSG_CONFLITO = 'Este horário já está reservado. Por favor, escolha outro.'
 
 /* ---------- Utilitários ---------- */
 
@@ -27,9 +32,15 @@ function horaAgora() {
   return `${String(agora.getHours()).padStart(2, '0')}:${String(agora.getMinutes()).padStart(2, '0')}`
 }
 
+// 'YYYY-MM-DD' -> 0 (domingo) a 6 (sábado), no fuso local
+function diaDaSemana(iso) {
+  const [ano, mes, dia] = iso.split('-').map(Number)
+  return new Date(ano, mes - 1, dia).getDay()
+}
+
 const moeda = (v) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
-function validar(form) {
+function validar(form, servico) {
   const erros = {}
   const digitos = form.contato.replace(/\D/g, '')
 
@@ -41,12 +52,14 @@ function validar(form) {
     erros.data = 'Escolha uma data.'
   } else if (form.data < hojeISO()) {
     erros.data = 'A data não pode estar no passado.'
+  } else if (DIAS_FOLGA.includes(diaDaSemana(form.data))) {
+    erros.data = 'Não atendemos neste dia da semana. Escolha outra data.'
   }
 
   if (!form.hora) {
     erros.hora = 'Escolha um horário.'
-  } else if (form.hora < HORA_ABERTURA || form.hora > HORA_FECHAMENTO) {
-    erros.hora = `Atendemos das ${HORA_ABERTURA} às ${HORA_FECHAMENTO}.`
+  } else if (servico && paraMinutos(form.hora) + servico.duracao_minutos > paraMinutos(HORA_FECHAMENTO)) {
+    erros.hora = 'Este serviço não termina antes do fechamento. Escolha um horário mais cedo.'
   } else if (form.data === hojeISO() && form.hora <= horaAgora()) {
     erros.hora = 'Esse horário já passou. Escolha um horário futuro.'
   }
@@ -67,9 +80,17 @@ export default function Formulario() {
   const [enviando, setEnviando] = useState(false)
   const [toast, setToast] = useState(null)
 
+  // Horários já ocupados na data escolhida (vindos do banco)
+  const [ocupados, setOcupados] = useState([])
+  const [buscandoHorarios, setBuscandoHorarios] = useState(false)
+  const [erroHorarios, setErroHorarios] = useState(false)
+  const [versaoHorarios, setVersaoHorarios] = useState(0) // aumentar este número = buscar de novo
+
   const fecharToast = useCallback(() => setToast(null), [])
 
-  // Busca os serviços reais assim que a página carrega
+  const servicoSelecionado = servicos.find((s) => s.id === form.servicoId)
+
+  // Busca os serviços ativos assim que a página carrega
   useEffect(() => {
     let cancelado = false
 
@@ -96,16 +117,81 @@ export default function Formulario() {
     }
   }, [])
 
+  // Sempre que a data muda (ou pedimos para recarregar), busca os horários ocupados.
+  // O visitante não pode ler "agendamentos" (tem dados de clientes), então a função
+  // horarios_ocupados, criada no banco, devolve só início e duração, sem nomes.
+  useEffect(() => {
+    if (!form.data) {
+      setOcupados([])
+      setErroHorarios(false)
+      return
+    }
+
+    let cancelado = false
+    setBuscandoHorarios(true)
+    setErroHorarios(false)
+
+    supabase.rpc('horarios_ocupados', { p_data: form.data }).then(({ data, error }) => {
+      if (cancelado) return
+
+      if (error) {
+        console.error('Erro ao buscar horários ocupados:', error)
+        setErroHorarios(true)
+        setOcupados([])
+      } else {
+        setOcupados(data ?? [])
+      }
+      setBuscandoHorarios(false)
+    })
+
+    return () => {
+      cancelado = true
+    }
+  }, [form.data, versaoHorarios])
+
+  // Grade de horários de 30 em 30 minutos que CABEM no serviço escolhido
+  const horarios = useMemo(() => {
+    if (!servicoSelecionado || !form.data) return []
+
+    const ehHoje = form.data === hojeISO()
+    return gerarHorarios({
+      abertura: HORA_ABERTURA,
+      fechamento: HORA_FECHAMENTO,
+      duracao: servicoSelecionado.duracao_minutos,
+      ocupados,
+      bloquearAte: ehHoje ? paraMinutos(horaAgora()) : -1,
+    })
+  }, [servicoSelecionado, form.data, ocupados])
+
+  const estadoHorarios =
+    !servicoSelecionado || !form.data
+      ? 'aguardando'
+      : buscandoHorarios
+      ? 'carregando'
+      : erroHorarios
+      ? 'erro'
+      : 'pronto'
+
   function atualizar(campo, valor) {
-    setForm((f) => ({ ...f, [campo]: valor }))
-    // limpa o erro do campo assim que o usuário volta a digitar
-    if (erros[campo]) setErros((e) => ({ ...e, [campo]: undefined }))
+    // Trocar serviço ou data muda quais horários servem: limpa o horário escolhido
+    const limpaHora = campo === 'data' || campo === 'servicoId'
+
+    setForm((f) => ({ ...f, [campo]: valor, ...(limpaHora ? { hora: '' } : {}) }))
+    setErros((e) => ({ ...e, [campo]: undefined, ...(limpaHora ? { hora: undefined } : {}) }))
+  }
+
+  // Alguém ocupou o horário: avisa, desmarca e atualiza a grade
+  function avisarConflito() {
+    setForm((f) => ({ ...f, hora: '' }))
+    setErros((e) => ({ ...e, hora: MSG_CONFLITO }))
+    setToast({ tipo: 'erro', mensagem: MSG_CONFLITO })
+    setVersaoHorarios((v) => v + 1)
   }
 
   async function handleSubmit(e) {
     e.preventDefault()
 
-    const novosErros = validar(form)
+    const novosErros = validar(form, servicoSelecionado)
     setErros(novosErros)
     if (Object.keys(novosErros).length > 0) {
       setToast({ tipo: 'erro', mensagem: 'Revise os campos destacados.' })
@@ -114,8 +200,24 @@ export default function Formulario() {
 
     setEnviando(true)
 
-    // IMPORTANTE: sem .select() — o visitante (anon) não tem permissão de SELECT.
-    // O status não é enviado: o banco aplica o padrão 'pendente'.
+    // 1) PRÉ-CHECAGEM: busca os horários ocupados DE NOVO (a tela pode estar
+    // desatualizada se outra pessoa agendou enquanto este cliente preenchia).
+    const { data: ocupadosAgora, error: erroChecagem } = await supabase.rpc('horarios_ocupados', {
+      p_data: form.data,
+    })
+
+    if (erroChecagem) {
+      // Se a checagem falhar, seguimos para o insert: o banco tem uma regra que
+      // recusa horários sobrepostos de qualquer jeito (veja o passo 2).
+      console.warn('Não foi possível rechecar a disponibilidade:', erroChecagem)
+    } else if (conflitaComOcupados(form.hora, servicoSelecionado.duracao_minutos, ocupadosAgora ?? [])) {
+      setEnviando(false)
+      avisarConflito()
+      return
+    }
+
+    // 2) INSERT. Sem .select(): o visitante não tem permissão de leitura.
+    // Status, preço e duração são preenchidos pelo próprio banco.
     const { error } = await supabase.from('agendamentos').insert({
       nome_cliente: form.nome.trim(),
       contato: form.contato,
@@ -127,13 +229,18 @@ export default function Formulario() {
     setEnviando(false)
 
     if (error) {
+      // 23P01 = o banco recusou por SOBREPOSIÇÃO de horário
+      // 23505 = o banco recusou por horário IDÊNTICO
+      // Acontece quando duas pessoas enviam quase ao mesmo tempo.
+      if (error.code === '23P01' || error.code === '23505') {
+        avisarConflito()
+        return
+      }
+
       console.error('Erro ao agendar:', error)
       setToast({
         tipo: 'erro',
-        mensagem:
-          error.code === '23505'
-            ? 'Esse horário já foi reservado. Escolha outro.'
-            : 'Não foi possível enviar seu pedido. Tente novamente em instantes.',
+        mensagem: 'Não foi possível enviar seu pedido. Tente novamente em instantes.',
       })
       return
     }
@@ -233,35 +340,30 @@ export default function Formulario() {
             )}
           </div>
 
-          {/* Data e hora */}
-          <div className="grid gap-6 sm:grid-cols-2">
-            <div>
-              <label htmlFor="data" className={label}>Data</label>
-              <input
-                id="data"
-                type="date"
-                min={hojeISO()}
-                value={form.data}
-                onChange={(e) => atualizar('data', e.target.value)}
-                className={`${campo} ${borda('data')} [color-scheme:dark]`}
-              />
-              {erros.data && <p className={msgErro}>{erros.data}</p>}
-            </div>
+          {/* Data */}
+          <div>
+            <label htmlFor="data" className={label}>Data</label>
+            <SeletorData
+              id="data"
+              value={form.data}
+              onChange={(valor) => atualizar('data', valor)}
+              temErro={Boolean(erros.data)}
+            />
+            {erros.data && <p className={msgErro}>{erros.data}</p>}
+          </div>
 
-            <div>
-              <label htmlFor="hora" className={label}>Horário</label>
-              <input
-                id="hora"
-                type="time"
-                min={HORA_ABERTURA}
-                max={HORA_FECHAMENTO}
-                step={900}
-                value={form.hora}
-                onChange={(e) => atualizar('hora', e.target.value)}
-                className={`${campo} ${borda('hora')} [color-scheme:dark]`}
-              />
-              {erros.hora && <p className={msgErro}>{erros.hora}</p>}
-            </div>
+          {/* Horário (botões de 30 em 30 minutos) */}
+          <div>
+            <span className={label}>Horário</span>
+            <SeletorHorario
+              horarios={horarios}
+              value={form.hora}
+              onChange={(valor) => atualizar('hora', valor)}
+              estado={estadoHorarios}
+              duracao={servicoSelecionado?.duracao_minutos}
+              onTentarNovamente={() => setVersaoHorarios((v) => v + 1)}
+            />
+            {erros.hora && <p className={msgErro}>{erros.hora}</p>}
           </div>
 
           <button
